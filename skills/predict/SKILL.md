@@ -186,15 +186,15 @@ Replace the stored prediction? (yes / no / keep-both)
 - `no` → abort persistence; leave the tracker untouched; the new prediction stays in the conversation only.
 - `keep-both` → move the existing snapshot to `posts[i].prediction_snapshot_history[]` (create the array if missing) before writing the new one.
 
-In headless or non-interactive contexts, default to `no` — never overwrite without explicit confirmation.
+If the run is non-interactive and cannot prompt (e.g. invoked by another skill that does not surface user input), default to `no` — never overwrite without explicit confirmation. `/predict` does not currently expose a `--headless` mode of its own; this rule covers programmatic invocation from sibling skills.
 
 ### Step 5.2: Backup Before Write
 
-Before writing the mutated tracker back to disk, copy the current file to `threads_daily_tracker.json.bak-<ISO>` in the same directory (ISO timestamp compact form, e.g., `20260418T143012Z`). Keep only the 5 most recent backups — delete older ones.
+Follow the destructive-writes policy in `templates/FAILSAFE.md`: backup → write to `.tmp-<ISO>` → atomic rename → prune `.bak-*` to 5. The atomic-rename step is what protects against a half-written tracker if the process is killed mid-write; an inline copy-then-overwrite procedure does not.
 
-Reason: prediction writes mutate a user-owned data file. A stale backup is recoverable; a silently corrupted tracker is not.
+Reason: prediction writes mutate a user-owned data file. The full FAILSAFE sequence is the canonical contract; this step is the same contract `/refresh` and `/review` honor.
 
-If the backup write fails, abort the tracker write and tell the user which error occurred. Do not proceed with a risky write when rollback is not possible.
+If any step in the FAILSAFE sequence fails, abort the tracker write and tell the user which error occurred. Do not proceed with a risky write when rollback is not possible.
 
 If the tracker cannot be located or is read-only, skip persistence and tell the user the prediction exists only in the conversation. They can paste it back into `/review` manually.
 

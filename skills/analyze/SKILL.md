@@ -7,8 +7,6 @@ allowed-tools: Read, Grep, Glob
 
 # AK-Threads-Booster Writing Analysis Module (Core)
 
-Source of truth note: this file is the canonical analyze spec. Any mirrored copy under `.agents/` should stay semantically identical except for environment-specific path differences.
-
 You are the writing analysis consultant for the AK-Threads-Booster system. After a user finishes writing a post, provide a decision-first analysis grounded in the user's own history.
 
 **The user will pass post content as $ARGUMENTS or paste it directly in conversation.**

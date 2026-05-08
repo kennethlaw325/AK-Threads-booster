@@ -87,14 +87,53 @@ def resolve_filenames(output_dir: Path, lang: str) -> Dict[str, Path]:
     return result
 
 
+def _prune_companion_backups(path: Path, keep: int = 5) -> None:
+    """Keep at most `keep` `<name>.bak-*` siblings per templates/FAILSAFE.md."""
+    backups = sorted(path.parent.glob(f"{path.name}.bak-*"))
+    if len(backups) <= keep:
+        return
+    for old in backups[: len(backups) - keep]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+
 def backup_if_user_modified(path: Path, tracker_mtime: float) -> None:
-    """If path exists and was modified after the tracker, back it up."""
+    """If path exists and was modified after the tracker, back it up.
+
+    Honors templates/FAILSAFE.md companion-markdown clause: prune
+    `.bak-*` siblings to the most recent 5 after each new backup so the
+    user's working dir does not accumulate stale archives forever.
+    """
     if not path.exists():
         return
     if path.stat().st_mtime > tracker_mtime + 1:
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         backup = path.with_suffix(path.suffix + f".bak-{ts}")
         backup.write_bytes(path.read_bytes())
+        _prune_companion_backups(path, keep=5)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Companion-markdown write per templates/FAILSAFE.md atomic-rename rule.
+
+    A crash mid-render must never leave a half-written
+    `posts_by_date.md` or `comments.md` that the panel will then read.
+    Write to `.tmp-<ISO>` first, then `os.replace` over destination.
+    """
+    import os
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    tmp = path.with_name(f"{path.name}.tmp-{ts}")
+    try:
+        tmp.write_text(content, encoding="utf-8", newline="\n")
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 def metrics_line(metrics: Dict[str, Any]) -> str:
@@ -225,9 +264,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     for path in names.values():
         backup_if_user_modified(path, tracker_mtime)
 
-    names["by_date"].write_text(render_by_date(posts, notice, args.lang), encoding="utf-8")
-    names["by_topic"].write_text(render_by_topic(posts, notice, args.lang, names["by_date"].name), encoding="utf-8")
-    names["comments"].write_text(render_comments(posts, tracker, notice, args.lang), encoding="utf-8")
+    _atomic_write_text(names["by_date"], render_by_date(posts, notice, args.lang))
+    _atomic_write_text(names["by_topic"], render_by_topic(posts, notice, args.lang, names["by_date"].name))
+    _atomic_write_text(names["comments"], render_comments(posts, tracker, notice, args.lang))
 
     total_comments = sum(len(p.get("comments") or []) for p in posts)
     unmatched = len(tracker.get("unmatched_comments") or [])

@@ -12,11 +12,14 @@ Only run this flow when the API path is unavailable or the user explicitly asks 
 
 ```json
 {
+  "schema_version": 1,
   "account": { "handle": "", "source": "chrome-scrape", "timezone": "UTC" },
   "posts": [],
   "last_updated": null
 }
 ```
+
+`schema_version: 1` is required by `skills/setup/references/tracker-schema.md`; downstream skills validate it.
 
 Interactive mode may ask for the handle if needed.
 
