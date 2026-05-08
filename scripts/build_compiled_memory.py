@@ -116,6 +116,20 @@ def median_nonzero(values: Iterable[int]) -> Optional[float]:
     return float(statistics.median(clean))
 
 
+def _median_nonzero_float(values: Iterable[Optional[float]]) -> Optional[float]:
+    """Median over float rates; treats 0.0 as a valid sample (unlike
+    `median_nonzero` which filters >0 to drop missing-data sentinels).
+
+    Use this for fractional engagement rates where 0.0 is a real
+    measurement, not a sentinel — otherwise the int-truncation pattern
+    `int(rate * 10000)` would be needed to coerce the output to an int.
+    """
+    clean = [float(v) for v in values if v is not None]
+    if not clean:
+        return None
+    return float(statistics.median(clean))
+
+
 def compare_ratio(recent_value: Optional[float], baseline_value: Optional[float]) -> Optional[float]:
     if recent_value is None or baseline_value is None or baseline_value <= 0:
         return None
@@ -163,17 +177,34 @@ def originality_risk_count(posts: List[Dict[str, Any]]) -> int:
 
 
 AI_TONE_PATTERNS = [
+    # English templates
     "not just",
     "in today's world",
     "the key is",
     "ultimately",
     "furthermore",
     "moreover",
+    "in summary",
+    "to summarize",
+    # Chinese templates — both 繁中 and 简中 forms
     "不只是",
     "關鍵是",
+    "关键是",
     "最重要的是",
     "總結來說",
+    "总结来说",
+    "綜上所述",
+    "综上所述",
     "換句話說",
+    "换句话说",
+    "身為一個",
+    "身为一个",
+    "總而言之",
+    "总而言之",
+    "值得一提",
+    "值得一提的是",
+    "讓我們",
+    "让我们",
 ]
 
 
@@ -424,18 +455,44 @@ def render_recent_window(meta: Dict[str, Any], posts: List[Dict[str, Any]], limi
     return "\n".join(lines) + "\n"
 
 
+RECENT_WINDOW = 10
+CLUSTER_FATIGUE_THRESHOLD = 3
+FATIGUE_COUNT_THRESHOLD = 3
+
+
+def _safe_rate(numerator_fn, denominator_fn, post: Dict[str, Any]) -> Optional[float]:
+    """Return numerator/denominator as a float or None when denom is 0."""
+    denom = denominator_fn(post)
+    if not denom:
+        return None
+    return float(numerator_fn(post)) / float(denom)
+
+
 def account_state_summary(posts: List[Dict[str, Any]]) -> Dict[str, Any]:
-    recent = recent_posts(posts, 10)
+    recent = recent_posts(posts, RECENT_WINDOW)
     historical_view_median = median_nonzero(views(p) for p in posts)
     recent_view_median = median_nonzero(views(p) for p in recent)
-    historical_reply_rate = median_nonzero(int(rate(replies(p), max(views(p), 1)) * 10000) for p in posts if views(p))
-    recent_reply_rate = median_nonzero(int(rate(replies(p), max(views(p), 1)) * 10000) for p in recent if views(p))
-    historical_share_rate = median_nonzero(int(rate(shares(p), max(views(p), 1)) * 10000) for p in posts if views(p))
-    recent_share_rate = median_nonzero(int(rate(shares(p), max(views(p), 1)) * 10000) for p in recent if views(p))
+    # Compute reply / share rates as float ratios. The previous code
+    # multiplied by 10000 then int-truncated, which collapsed any post
+    # with rate < 1e-4 to 0 before `median_nonzero` filtered v>0 — that
+    # silently dropped low-engagement posts from the baseline and biased
+    # the ratio upward. Pass float rates straight to a non-zero-filtered
+    # median.
+    def _reply_rate(p):
+        return _safe_rate(replies, views, p)
+    def _share_rate(p):
+        return _safe_rate(shares, views, p)
+    historical_reply_rate = _median_nonzero_float(_reply_rate(p) for p in posts)
+    recent_reply_rate = _median_nonzero_float(_reply_rate(p) for p in recent)
+    historical_share_rate = _median_nonzero_float(_share_rate(p) for p in posts)
+    recent_share_rate = _median_nonzero_float(_share_rate(p) for p in recent)
     cluster_counts = Counter(semantic_cluster(p) or "uncategorized" for p in recent)
     fatigue_count = sum(1 for p in recent if str(freshness_value(p, "fatigue_risk") or "").lower() in {"medium", "high"})
     ai_hits = sum(ai_tone_hits(post_text(p)) for p in recent)
-    total_words = sum(max(word_count(post_text(p)), 1) for p in recent)
+    # AI-tone ratio: don't inflate the denominator with a per-post `max(.., 1)`
+    # clamp. A short / empty post should contribute 0, not 1, otherwise the
+    # ratio is artificially diluted on sparse trackers.
+    total_words = sum(word_count(post_text(p)) for p in recent)
 
     view_ratio = compare_ratio(recent_view_median, historical_view_median)
     reply_ratio = compare_ratio(recent_reply_rate, historical_reply_rate)
@@ -449,7 +506,8 @@ def account_state_summary(posts: List[Dict[str, Any]]) -> Dict[str, Any]:
         priorities.append(("私下分享潛力", "S1", "recent share/repost rate is below the account baseline"))
     if reply_ratio is not None and reply_ratio < 0.8:
         priorities.append(("深留言觸發", "S2", "recent reply rate is below the account baseline"))
-    if fatigue_count >= 3 or (cluster_counts and cluster_counts.most_common(1)[0][1] >= 3):
+    top_cluster_count = cluster_counts.most_common(1)[0][1] if cluster_counts else 0
+    if fatigue_count >= FATIGUE_COUNT_THRESHOLD or top_cluster_count >= CLUSTER_FATIGUE_THRESHOLD:
         priorities.append(("題材新鮮度", "S14", "recent posts cluster too tightly"))
         risks.append(("R5", "連續同題材", "recent semantic clusters repeat enough to watch for fatigue"))
     if originality_risk_count(recent) > 0:

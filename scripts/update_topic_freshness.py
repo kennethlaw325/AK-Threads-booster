@@ -144,9 +144,17 @@ class UnionFind:
         self.rank = [0] * size
 
     def find(self, value: int) -> int:
-        if self.parent[value] != value:
-            self.parent[value] = self.find(self.parent[value])
-        return self.parent[value]
+        # Iterative two-pass path compression. Recursive path compression
+        # blows the default 1000-frame Python stack on tracker histories
+        # with one giant cluster (>1K posts) — RecursionError aborts the
+        # whole `update_topic_freshness` run.
+        root = value
+        while self.parent[root] != root:
+            root = self.parent[root]
+        # Second pass: flatten parents to point directly at root.
+        while self.parent[value] != root:
+            self.parent[value], value = root, self.parent[value]
+        return root
 
     def union(self, left: int, right: int) -> None:
         root_left = self.find(left)
