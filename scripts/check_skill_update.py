@@ -47,6 +47,9 @@ def validate_python_files(repo: Path, changed_files: List[str]) -> Dict[str, Any
             results.append({"file": str(path.relative_to(repo)), "status": "ok"})
         except py_compile.PyCompileError as exc:
             results.append({"file": str(path.relative_to(repo)), "status": "failed", "error": str(exc)})
+        except OSError as exc:
+            # File vanished between scan and compile (e.g. concurrent merge).
+            results.append({"file": str(path.relative_to(repo)), "status": "missing", "error": str(exc)})
     return {
         "checked_python_files": [item["file"] for item in results],
         "passed": all(item["status"] == "ok" for item in results),
@@ -81,7 +84,20 @@ def main() -> int:
         return 2
 
     remote_ref = f"{args.remote}/{args.branch}"
-    run_git(["fetch", "--prune", args.remote], repo)
+    try:
+        run_git(["fetch", "--prune", args.remote], repo)
+    except subprocess.CalledProcessError as exc:
+        # The whole script's value is the JSON-status contract. A network
+        # blip during fetch should produce a structured failure, not a raw
+        # CalledProcessError stack trace that breaks downstream parsers.
+        result.update(
+            {
+                "status": "fetch_failed",
+                "error": (exc.stderr or "").strip() or str(exc),
+            }
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 2
 
     current_branch = git_output(["branch", "--show-current"], repo, check=False) or "detached"
     local_head = git_output(["rev-parse", "HEAD"], repo)

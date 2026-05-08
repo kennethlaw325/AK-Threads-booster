@@ -96,6 +96,13 @@ When `/review` finishes and the log has **≥ 10 entries** (any time, not just n
 - Tell the user to run `/optimize` — it ships with this skill, clusters entries by `(sub_skill, category)`, drafts concrete rule-edit proposals grounded in verbatim `user_signal` quotes, and applies only what the user approves per-proposal.
 - Do **not** auto-patch sub-skills. The trigger is advisory only. `/optimize` still requires explicit user approval on every proposed edit.
 
+> **Note:** The 10-entry log threshold is *necessary but not sufficient*
+> to produce proposals. `/optimize` separately requires **≥ 2 entries
+> in the same `(sub_skill, category)` cluster** before drafting a
+> rule-edit proposal. A log with 11 entries spread across 11 different
+> clusters will produce zero proposals; tell the user that explicitly
+> rather than letting `/optimize` say "nothing to do" without context.
+
 ---
 
 ## Reason to keep

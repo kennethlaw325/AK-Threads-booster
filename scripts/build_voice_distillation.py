@@ -34,12 +34,17 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 WORD_RE = re.compile(r"[A-Za-z0-9_\-\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af\u0e00-\u0e7f]+")
-SENTENCE_RE = re.compile(r"[^。！？!?.\n]+[。！？!?.]?")
+# Sentence terminator: only CJK full-stop / question / exclamation. Latin `.`
+# is excluded because it splits decimals (3.50), URLs, and abbreviations (e.g.)
+# mid-token. Sentences without a trailing terminator are still captured.
+SENTENCE_RE = re.compile(r"[^。！？!?\n]+[。！？!?]?")
 EMOJI_RE = re.compile(
     "["
     "\U0001F300-\U0001FAFF"
     "\U00002700-\U000027BF"
     "\U00002600-\U000026FF"
+    "\U0001F1E6-\U0001F1FF"  # regional indicators (flag halves)
+    "\U0001F100-\U0001F1FF"  # enclosed alphanumerics supplement
     "]+",
     flags=re.UNICODE,
 )
@@ -290,9 +295,22 @@ def classify_ending(text: str) -> str:
     return "soft_landing_ending"
 
 
-def pattern_inventory(posts: List[Dict[str, Any]], classifier, label: str) -> List[Dict[str, Any]]:
+def pattern_inventory(
+    posts: List[Dict[str, Any]],
+    classifier,
+    label: str,
+    high_ids: Optional[set] = None,
+) -> List[Dict[str, Any]]:
+    """Bucket posts by classifier label and annotate with high-engagement ids.
+
+    `high_ids` should be precomputed by the caller and reused across the
+    four invocations (all/high × opening/ending). The previous version
+    recomputed `top_engagement_posts(posts)` on every call, which forced
+    a redundant O(n log n) sort each time.
+    """
+    if high_ids is None:
+        high_ids = {p.get("id") for p in top_engagement_posts(posts)}
     buckets: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    high_ids = {p.get("id") for p in top_engagement_posts(posts)}
     for post in posts:
         text = post_text(post)
         if not text:
@@ -473,15 +491,30 @@ def belief_candidates(posts: List[Dict[str, Any]], limit: int = 80) -> List[Dict
 
 
 def anti_voice_candidates(posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    text = "\n".join(post_text(post) for post in posts)
+    """Surface AI-template phrases the user almost never uses.
+
+    The intent is "phrases the user has effectively chosen against" — so
+    the metric should be *posts containing the phrase*, not raw occurrence
+    count. The previous version counted occurrences (5 hits in 1 post
+    counted as 5), which over-reported phrases that happen to appear
+    several times in a single post and under-counted spread.
+
+    Threshold: a phrase appears in <= 2% of posts (or <= 1 post for
+    small trackers) is treated as a candidate not-me phrase.
+    """
     total = len(posts)
+    if total == 0:
+        return []
+    threshold = max(1, math.floor(total * 0.02))
     rows = []
     for pattern in AI_TEMPLATE_PATTERNS:
-        count = text.lower().count(pattern.lower())
-        if count <= max(1, math.floor(total * 0.02)):
+        needle = pattern.lower()
+        posts_with_pattern = sum(1 for post in posts if needle in post_text(post).lower())
+        if posts_with_pattern <= threshold:
             rows.append({
                 "pattern": pattern,
-                "observed_count": count,
+                "posts_with_pattern": posts_with_pattern,
+                "total_posts": total,
                 "candidate_rule": "Treat as possible not-me phrasing; verify in Manual Refinements before making it a hard rule.",
             })
     return rows
@@ -568,15 +601,15 @@ def build_voice_fingerprint(tracker_path: Path) -> Dict[str, Any]:
         "voice_fingerprint": {
             "all_posts": {
                 "rhythm": rhythm_stats(posts),
-                "opening_inventory": pattern_inventory(posts, classify_opening, "opening"),
-                "ending_inventory": pattern_inventory(posts, classify_ending, "ending"),
+                "opening_inventory": pattern_inventory(posts, classify_opening, "opening", high_ids=high_ids),
+                "ending_inventory": pattern_inventory(posts, classify_ending, "ending", high_ids=high_ids),
                 "phrases": phrase_inventory(posts),
                 "comment_replies": comment_reply_stats(posts),
             },
             "high_engagement_posts": {
                 "rhythm": rhythm_stats(high_posts),
-                "opening_inventory": pattern_inventory(high_posts, classify_opening, "opening"),
-                "ending_inventory": pattern_inventory(high_posts, classify_ending, "ending"),
+                "opening_inventory": pattern_inventory(high_posts, classify_opening, "opening", high_ids=high_ids),
+                "ending_inventory": pattern_inventory(high_posts, classify_ending, "ending", high_ids=high_ids),
                 "phrases": phrase_inventory(high_posts),
             },
         },
@@ -591,8 +624,8 @@ def build_voice_fingerprint(tracker_path: Path) -> Dict[str, Any]:
             "instruction": "These are absence or low-frequency signals, not hard taboos until the user confirms or evidence is strong.",
         },
         "draft_quick_reference_seed": {
-            "top_opening_formulas": pattern_inventory(high_posts, classify_opening, "opening")[:5],
-            "top_ending_formulas": pattern_inventory(high_posts, classify_ending, "ending")[:5],
+            "top_opening_formulas": pattern_inventory(high_posts, classify_opening, "opening", high_ids=high_ids)[:5],
+            "top_ending_formulas": pattern_inventory(high_posts, classify_ending, "ending", high_ids=high_ids)[:5],
             "calibration_pairs": calibration_pairs(posts),
             "high_engagement_anchor_ids": [post.get("id") for post in high_posts if post.get("id")],
         },
@@ -698,7 +731,10 @@ def render_markdown(data: Dict[str, Any]) -> str:
         lines.extend(f"- `{item['feature']}` stayed `{item['value']}` across phases." for item in stable)
     lines.extend(["", "## Anti-Voice Seed"])
     for row in data["anti_voice_seed"]["candidate_not_me_phrases"][:12]:
-        lines.append(f"- `{row['pattern']}` observed {row['observed_count']} times. {row['candidate_rule']}")
+        lines.append(
+            f"- `{row['pattern']}` appeared in {row['posts_with_pattern']} of "
+            f"{row['total_posts']} posts. {row['candidate_rule']}"
+        )
     lines.extend(["", "## /draft Quick-Reference Seed"])
     for pair in data["draft_quick_reference_seed"]["calibration_pairs"]:
         lines.extend([

@@ -222,6 +222,7 @@ AK-Threads-booster/
 |  |- voice/SKILL.md
 |  |- panel/SKILL.md
 |  |- update/SKILL.md
+|  |- optimize/SKILL.md
 |- knowledge/
 |  |- _shared/
 |  |- psychology.md

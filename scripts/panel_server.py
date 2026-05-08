@@ -44,14 +44,33 @@ def find_port(host: str, requested: int) -> int:
     raise SystemExit(f"No available port found from {requested} to {requested + 49}")
 
 
-def newest_file(root: Path, names: tuple[str, ...]) -> Path | None:
+def newest_file(root: Path, names: tuple[str, ...], max_depth: int = 3) -> Path | None:
+    """Find newest file in `root` matching one of `names`.
+
+    Bounded recursion (default 3 levels) keeps `node_modules`, vault
+    folders, and other deep trees from blowing up the manifest endpoint
+    on rich workspaces. The data files we actually care about all live
+    within 1-2 levels of the workspace root.
+    """
     if not root.exists():
         return None
     matches: list[Path] = []
     wanted = set(names)
-    for path in root.rglob("*"):
-        if path.is_file() and path.name in wanted and ".legacy-" not in path.name:
-            matches.append(path)
+    root_depth = len(root.parts)
+
+    def _walk(directory: Path, depth: int) -> None:
+        if depth > max_depth:
+            return
+        try:
+            for child in directory.iterdir():
+                if child.is_dir():
+                    _walk(child, depth + 1)
+                elif child.name in wanted and ".legacy-" not in child.name:
+                    matches.append(child)
+        except (PermissionError, OSError):
+            return
+
+    _walk(root, 0)
     if not matches:
         return None
     return max(matches, key=lambda item: item.stat().st_mtime)
@@ -159,7 +178,25 @@ class PanelRequestHandler(http.server.SimpleHTTPRequestHandler):
             return
         output_dir = tracker.parent / "compiled"
         command = [sys.executable, str(script), "--tracker", str(tracker), "--output-dir", str(output_dir)]
-        completed = subprocess.run(command, cwd=str(root), capture_output=True, text=True, timeout=60)
+        # 300s timeout: build_voice_distillation + compiled-memory builders
+        # process the entire post history. On a year of daily posts this
+        # routinely exceeds the previous 60s ceiling, so the request handler
+        # would crash with `subprocess.TimeoutExpired` instead of returning
+        # a structured error.
+        try:
+            completed = subprocess.run(
+                command, cwd=str(root), capture_output=True, text=True, timeout=300
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.send_json(
+                504,
+                {
+                    "ok": False,
+                    "error": "build_compiled_memory.py exceeded the 300s rebuild timeout",
+                    "stdout": (exc.stdout or b"").decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or ""),
+                },
+            )
+            return
         if completed.returncode != 0:
             self.send_json(500, {"ok": False, "error": completed.stderr or completed.stdout})
             return
@@ -224,7 +261,11 @@ def main() -> int:
     )
     handler = functools.partial(handler_class, directory=str(root))
 
-    with socketserver.TCPServer((args.host, port), handler) as server:
+    # ThreadingTCPServer so a slow request (e.g. compiled-memory rebuild)
+    # does not block the manifest endpoint the panel polls. Single-threaded
+    # TCPServer froze the UI for the duration of every rebuild.
+    with socketserver.ThreadingTCPServer((args.host, port), handler) as server:
+        server.daemon_threads = True
         url = f"http://{args.host}:{port}/panel/index.html"
         print(f"AK Threads Booster panel: {url}", flush=True)
         print(f"Data root: {data_root}", flush=True)
