@@ -17,6 +17,7 @@ The script handles both JSON and HTML export formats from Meta.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -96,6 +97,18 @@ def decode_meta_text(text: str) -> str:
         return text.encode("latin-1").decode("utf-8")
     except (UnicodeDecodeError, UnicodeEncodeError):
         return text
+
+
+def _stable_export_id(text: str) -> str:
+    """Deterministic post ID from text content.
+
+    Python's built-in `hash()` is randomised per process, so re-running
+    parse_export on the same input produced different IDs each time —
+    breaking dedup in `update_snapshots.ingest_new_posts`. Use sha1 so
+    the same text always maps to the same ID.
+    """
+    digest = hashlib.sha1((text or "").encode("utf-8")).hexdigest()
+    return f"export_{digest[:16]}"
 
 
 def parse_json_export(file_path: str) -> list:
@@ -263,7 +276,7 @@ def extract_post_from_json(item: dict) -> Optional[dict]:
         return None
 
     return {
-        "id": str(item.get("id", item.get("uri", f"export_{hash(text)}"))),
+        "id": str(item.get("id", item.get("uri", _stable_export_id(text)))),
         "text": text,
         "created_at": timestamp,
         "permalink": item.get("permalink", item.get("url", "")),
@@ -425,7 +438,7 @@ def parse_html_export(file_path: str) -> list:
             continue
 
         posts.append({
-            "id": f"export_{hash(text)}",
+            "id": _stable_export_id(text),
             "text": text,
             "created_at": item.get("timestamp", ""),
             "permalink": "",
