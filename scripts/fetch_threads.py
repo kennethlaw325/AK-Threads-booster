@@ -21,6 +21,7 @@ The script will:
 
 import argparse
 import json
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -148,11 +149,21 @@ def fetch_thread_replies(thread_id: str, token: str) -> list:
             paging = data.get("paging", {})
             url = paging.get("next")
             params = {}
-        except requests.exceptions.HTTPError:
+        except requests.exceptions.HTTPError as exc:
+            # Surface the failure instead of breaking silently — otherwise
+            # the user sees "found 50 replies" when the API actually 5xx'd
+            # at page 2 and downstream flows are missing data.
+            print(f"  Warning: replies fetch stopped at {url}: {exc}")
             break
         time.sleep(RATE_LIMIT_DELAY)
 
     return replies
+
+
+_DATA_BOUNDARY_RE = re.compile(r"\bdata\b", re.IGNORECASE)
+_CJK_WORD_RE = re.compile(
+    r"[A-Za-z0-9_\-一-鿿぀-ヿ가-힯฀-๿]+"
+)
 
 
 def classify_content_type(text: str) -> str:
@@ -166,7 +177,13 @@ def classify_content_type(text: str) -> str:
             return "question"
     if any(marker in text for marker in ["1.", "2.", "3.", "一、", "二、", "第一", "步驟"]):
         return "tutorial"
-    if any(marker in text for marker in ["數據", "data", "%", "成長", "增長"]):
+    # Match `data` only as a whole word so "I have no data on that" stays
+    # opinion rather than becoming data-insight via substring leak. CJK
+    # markers stay as-is.
+    if (
+        _DATA_BOUNDARY_RE.search(text)
+        or any(marker in text for marker in ["數據", "%", "成長", "增長", "数据", "增长"])
+    ):
         return "data-insight"
     if any(marker in text for marker in ["我的經驗", "我之前", "那時候", "故事"]):
         return "story"
@@ -175,8 +192,16 @@ def classify_content_type(text: str) -> str:
 
 
 def count_words(text: str) -> int:
-    """Estimate word count from whitespace-separated tokens."""
-    return len(text.split()) if text else 0
+    """Word count covering CJK characters + Latin tokens.
+
+    Whitespace-split alone treats a 200-char Chinese-only post as one
+    "word", making downstream `word_count` fields meaningless on CJK
+    content. The regex matches the same character set as
+    `build_compiled_memory.WORD_RE` so all derived stats agree.
+    """
+    if not text:
+        return 0
+    return len(_CJK_WORD_RE.findall(text))
 
 
 def count_paragraphs(text: str) -> int:

@@ -29,6 +29,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 try:
     from fetch_threads import (
@@ -104,9 +105,16 @@ def backup_tracker(tracker_path: str, keep: int = 5) -> str:
     return str(backup_path)
 
 
-def build_new_post_entry(thread: dict, token: str) -> dict:
-    """Build a full v1 post entry for a post that isn't yet in the tracker."""
-    thread_id = thread["id"]
+def build_new_post_entry(thread: dict, token: str) -> Optional[dict]:
+    """Build a full v1 post entry for a post that isn't yet in the tracker.
+
+    Returns None if the API row is malformed (missing `id`); the caller
+    should skip and log so a single bad item does not abort the entire
+    `--include-new-posts` pass.
+    """
+    thread_id = thread.get("id")
+    if not thread_id:
+        return None
     text = thread.get("text", "")
     created_at = thread.get("timestamp", "")
 
@@ -170,9 +178,16 @@ def ingest_new_posts(tracker: dict, token: str) -> int:
         return 0
 
     print(f"  Found {len(new_threads)} new post(s); fetching full data...")
+    skipped = 0
     for thread in new_threads:
         entry = build_new_post_entry(thread, token)
+        if entry is None:
+            skipped += 1
+            print(f"  Warning: skipped malformed API row (no `id`): keys={list(thread.keys())[:5]}...")
+            continue
         tracker.setdefault("posts", []).insert(0, entry)
+    if skipped:
+        print(f"  Skipped {skipped} malformed item(s); the rest were ingested normally.")
 
     # Re-sort newest-first on created_at so the tracker stays ordered.
     tracker["posts"].sort(key=lambda p: p.get("created_at", ""), reverse=True)
@@ -200,7 +215,20 @@ def snapshot_distance(snapshot: dict, target_hours: float) -> float:
 
 
 def update_performance_windows(post: dict, snapshot: dict) -> None:
-    """Update checkpoint windows if the new snapshot is a better fit."""
+    """Update checkpoint windows with the snapshot closest to each target.
+
+    The previous version gated on fixed 12h / 24h / 48h acceptance
+    windows around the 24h / 72h / 7d targets. A user who refreshed
+    weekly never satisfied the 24h gate (distance was always > 12h),
+    so `performance_windows["24h"]` stayed `null` for every post
+    regardless of actual data — silently breaking `/predict` and
+    `/review` features that depend on the checkpoint.
+
+    New behavior: always accept the snapshot if it is closer to the
+    target than the currently-stored one. The "distance from target"
+    is preserved on the stored snapshot via `snapshot_distance`, so
+    consumers can still reason about checkpoint quality.
+    """
     performance_windows = post.setdefault("performance_windows", {})
 
     for key, target_hours in CHECKPOINT_TARGETS.items():
@@ -209,27 +237,25 @@ def update_performance_windows(post: dict, snapshot: dict) -> None:
         if new_distance == float("inf"):
             continue
 
-        # Accept snapshots within a reasonable range around the checkpoint.
-        if key == "24h" and new_distance > 12:
-            continue
-        if key == "72h" and new_distance > 24:
-            continue
-        if key == "7d" and new_distance > 48:
-            continue
-
         current_distance = snapshot_distance(current or {}, target_hours)
         if current is None or new_distance < current_distance:
             performance_windows[key] = snapshot
 
 
 def append_snapshot(post: dict, snapshot: dict) -> None:
-    """Append or replace the latest snapshot if the run is too close to the previous one."""
+    """Append or replace the latest snapshot if the run is too close to the previous one.
+
+    Dedup by minute (truncate ISO timestamp to ``YYYY-MM-DDTHH:MM``)
+    rather than exact-string comparison: two refresh runs separated by
+    microseconds (e.g. cron + manual within the same minute) would
+    otherwise both be retained, inflating ``snapshots[]`` and biasing
+    nearest-checkpoint distance calculations.
+    """
     snapshots = post.setdefault("snapshots", [])
     if snapshots:
-        last = snapshots[-1]
-        last_captured_at = last.get("captured_at")
-        current_captured_at = snapshot.get("captured_at")
-        if last_captured_at == current_captured_at:
+        last_minute = (snapshots[-1].get("captured_at") or "")[:16]
+        current_minute = (snapshot.get("captured_at") or "")[:16]
+        if last_minute and last_minute == current_minute:
             snapshots[-1] = snapshot
             return
 

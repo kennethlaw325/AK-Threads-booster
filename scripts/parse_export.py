@@ -67,10 +67,16 @@ def find_threads_data(export_path: str) -> dict:
                 print(f"  Found HTML data: {html_file}")
                 break
 
-    # If still nothing, try to find any JSON with threads content
+    # If still nothing, try to find any JSON with threads content.
+    # Skip files larger than 50MB (Meta exports include `messages/inbox/`
+    # archives that can hit hundreds of MB; full json.load OOMs and is
+    # always irrelevant for Threads detection).
+    MAX_PROBE_BYTES = 50 * 1024 * 1024
     if not result["posts_file"]:
         for json_file in export_dir.rglob("*.json"):
             try:
+                if json_file.stat().st_size > MAX_PROBE_BYTES:
+                    continue
                 with open(json_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 # Check if this looks like threads data
@@ -81,17 +87,31 @@ def find_threads_data(export_path: str) -> dict:
                     result["posts_file"] = str(json_file)
                     print(f"  Found threads data in: {json_file}")
                     break
-            except (json.JSONDecodeError, UnicodeDecodeError):
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+                # OSError covers PermissionError on network shares + races
+                # where a file vanishes between rglob and open.
                 continue
 
     return result
 
 
+_MOJIBAKE_HINT_RE = re.compile(r"[Â-Ã][-¿]")
+
+
 def decode_meta_text(text: str) -> str:
-    """Decode Meta's escaped Unicode in JSON exports."""
+    """Decode Meta's escaped UTF-8-as-latin-1 mojibake in JSON exports.
+
+    Older Meta exports double-encode UTF-8 strings as latin-1, producing
+    sequences like `\\u00c3\\u00a9` where the original was é. The previous
+    version always re-encoded via latin-1, which silently corrupted
+    properly-encoded text whose bytes happened to fall outside latin-1's
+    printable range. Detect the mojibake pattern first and only re-decode
+    when it is present.
+    """
     if not text:
         return ""
-    # Meta exports sometimes use escaped UTF-8 sequences
+    if not _MOJIBAKE_HINT_RE.search(text):
+        return text
     try:
         return text.encode("latin-1").decode("utf-8")
     except (UnicodeDecodeError, UnicodeEncodeError):
