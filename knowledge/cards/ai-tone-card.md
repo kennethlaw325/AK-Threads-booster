@@ -8,12 +8,30 @@ Use this for `lite` and `standard` runtime. Load `knowledge/ai-detection.md` onl
 
 ## Definite AI-Tone Patterns
 
+### English templates
+
 - Fixed phrase clusters: "not just X, but Y", "in today's world", "the key is".
 - Over-balanced contrast pairs repeated across paragraphs.
 - Consecutive quote-like lines with identical rhythm.
 - Formal connectors stacked in casual writing: moreover, furthermore, ultimately.
 - Philosophical ending that does not grow from the body.
 - Abstract judgment without a concrete example.
+- "In summary" / "to summarize" closers when the body did not need a summary.
+
+### Chinese templates (繁中 / 简中)
+
+The deterministic `AI_TONE_PATTERNS` list in
+`scripts/build_compiled_memory.py` checks both forms; the quick card
+should mirror them so card-mode flagging matches what
+`compiled/account_state.md` reports:
+
+- `不只是` / `關鍵是` / `关键是` — the X-不只是-Y template
+- `最重要的是`
+- `總結來說` / `总结来说` / `綜上所述` / `综上所述` — wrap-up tells
+- `換句話說` / `换句话说`
+- `身為一個` / `身为一个` — formal opener rarely seen in casual voice
+- `總而言之` / `总而言之` / `值得一提` / `值得一提的是` — closers that lean AI
+- `讓我們` / `让我们` — instructive lead-in LLMs over-use
 
 ## Possible AI-Tone Patterns
 

@@ -35,6 +35,19 @@ Beyond the per-task count above, apply these gates at the dataset level:
 - **20+ posts**: solid working baseline for all skills.
 - **50+ posts**: strong cross-analysis baseline; `/voice` can extract micro-features reliably.
 
+> **Two ladders, same labels — distinguish in output.** The per-task
+> ladder above (`< 5`, `5-9`, `10-19`, `20-49`, `50+`) counts
+> *comparable posts for the current question*. The compiled-memory
+> builders (`scripts/build_compiled_memory.py`, `build_voice_distillation.py`)
+> emit a **dataset-level** confidence label using a different scale
+> (`< 10`, `10-19`, `20-49`, `50-99`, `100+` total posts). Both happen
+> to share the names Directional / Weak / Usable / Strong / Deep, but
+> they answer different questions. When citing one, name which:
+>
+> - "Reference Strength: Weak" (per-task) → 5-9 comparable posts.
+> - `compiled/account_state.md _meta.confidence_level: Weak` (dataset)
+>   → 10-19 total tracker posts.
+
 ---
 
 ## How to surface this in output

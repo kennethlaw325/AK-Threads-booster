@@ -2,4 +2,4 @@ interface:
   display_name: "AK Threads Booster"
   short_description: "Threads 發文決策與分析 skill"
   brand_color: "#3a4cf0"
-  default_prompt: "Use $ak-threads-booster to analyze, draft, or review a Threads post using the user's historical data."
+  default_prompt: "Analyze, draft, or review a Threads post using the user's historical data via the AK-Threads-Booster skill."

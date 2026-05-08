@@ -79,6 +79,23 @@ AK體新增 `/update` 模組，可以檢查 GitHub 上的 AK-Threads-Booster 是
 
 如果舊版 `brand_voice.md` 還沒有這些 section，`/draft` 會提醒重新跑 `/voice`，而不是假裝 voice baseline 已經夠精準。
 
+### 新增 `/optimize`：把 compound log 嘅 misses 變成可審核嘅 sub-skill rule edits
+
+`/optimize` 之前係 compound log 形式（2026-04-25 引入），AK體 2.0 將佢正式升級成獨立 sub-skill：
+
+- 讀 `threads_skill_learnings.log` 入面 ≥ 2 條同 `(sub_skill, category)` cluster 嘅 entry。
+- 對每個 cluster 草擬一個 sub-skill rule edit 提案，附 user_signal 引文做依據。
+- 用戶逐個 approve / reject，唔會自動改 SKILL.md。
+- Reject 嘅提案 log 入 `skills/optimize/references/rejected-proposals.md` 做 dedupe signal，避免下次重複建議。
+
+### 新增 `evals/` 評估層
+
+獨立 fixture-based 評估層保護 sub-skill 行為唔靜默回退：
+
+- `evals/rubric.md` — canonical scoring rubric。
+- `evals/fixtures/` — 7 個 minimal reproducible test case。
+- `evals/runbook.md` — 點樣手動或用 evaluator agent 跑 eval pass。
+
 ### 版本
 
 - Main `SKILL.md`：`2.0.0`
