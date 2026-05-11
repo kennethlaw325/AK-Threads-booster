@@ -89,6 +89,18 @@ For each approved proposal:
 2. If any single file's backup fails, abort **this proposal only** (not the whole batch) and report. Other proposals continue.
 3. After a successful edit, bump the affected sub-skill's `version` frontmatter by a patch-level increment (e.g. `1.1.0 → 1.1.1`). Shared-file edits bump the main SKILL.md version.
 
+### Step 4.5: Suggest `/eval replay` (optional)
+
+If any approved edit changed sub-skill rule text (not just a typo) **and** `eval_candidates.jsonl` exists with ≥ 5 candidates for the affected sub-skill, surface a one-line nudge:
+
+```text
+> 5+ captured candidates exist for `<sub_skill>`. Run `/eval export` to snapshot, then `/eval replay --against <snapshot>` to measure drift before considering the edit landed.
+```
+
+Do NOT auto-run `/eval`. Same human-in-the-loop boundary as the rest of `/optimize`. The user invokes replay separately when they want regression numbers.
+
+If `eval_candidates.jsonl` does not exist or is empty, skip this step silently — capture is opt-in (`AK_THREADS_EVAL_CAPTURE=1`) and most users will not have it on.
+
 ### Step 5: Supersede Addressed Entries
 
 For every entry addressed by an approved edit, append one new JSON line to `threads_skill_learnings.log`:
